@@ -19,8 +19,8 @@ const app = {
 
     try {
       this.user = JSON.parse(userStr);
-      // Normalize role to lowercase for routing
-      this.user.role = (this.user.role_name || this.user.role || 'student').toLowerCase();
+      // Normalize role to lowercase with underscores for routing
+      this.user.role = (this.user.role_name || this.user.role || 'student').toLowerCase().replace(/ /g, '_');
       document.getElementById('userName').textContent = this.user.email;
       document.getElementById('userRole').textContent = this.user.role_name || this.user.role;
     } catch (e) {
@@ -76,14 +76,27 @@ const app = {
           { name: 'Dept Dashboard', icon: 'bi-building', path: 'dashboard' },
           { name: 'Faculty Comparison', icon: 'bi-people', path: 'faculty' },
           { name: 'Subject Analysis', icon: 'bi-bar-chart', path: 'subjects' },
+          { name: 'Feedback Summary', icon: 'bi-chat-left-dots', path: 'feedback' },
+          { name: 'Critical Feedback', icon: 'bi-exclamation-triangle', path: 'critical-feedback' },
           { name: 'Reports', icon: 'bi-file-earmark-text', path: 'reports' }
+        ];
+        break;
+      case 'program_coordinator':
+        items = [
+          { name: 'Dashboard', icon: 'bi-house', path: 'dashboard' },
+          { name: 'Faculty Allocation', icon: 'bi-link-45deg', path: 'allocation' },
+          { name: 'Subjects', icon: 'bi-book', path: 'subjects' },
+          { name: 'Attendance Mgmt', icon: 'bi-calendar2-check', path: 'attendance' },
+          { name: 'Feedback Summary', icon: 'bi-chat-left-dots', path: 'feedback' }
         ];
         break;
       case 'dean':
         items = [
           { name: 'College Overview', icon: 'bi-globe', path: 'dashboard' },
           { name: 'Departments', icon: 'bi-diagram-3', path: 'departments' },
+          { name: 'HOD Performance', icon: 'bi-person-badge', path: 'hod-performance' },
           { name: 'Faculty Summary', icon: 'bi-people', path: 'faculty' },
+          { name: 'Feedback Summary', icon: 'bi-chat-left-dots', path: 'feedback' },
           { name: 'Reports', icon: 'bi-file-earmark-text', path: 'reports' }
         ];
         break;
@@ -91,11 +104,18 @@ const app = {
         items = [
           { name: 'System Overview', icon: 'bi-speedometer2', path: 'dashboard' },
           { name: 'Users', icon: 'bi-person-gear', path: 'users' },
+          { name: 'Students', icon: 'bi-mortarboard', path: 'students' },
+          { name: 'Faculty', icon: 'bi-person-video3', path: 'faculty' },
+          { name: 'HODs', icon: 'bi-person-badge', path: 'hods-mgmt' },
+          { name: 'Program Coordinators', icon: 'bi-person-workspace', path: 'pcs-mgmt' },
+          { name: 'Faculty Assign', icon: 'bi-link-45deg', path: 'faculty-assignments' },
           { name: 'Departments', icon: 'bi-building', path: 'departments' },
           { name: 'Subjects', icon: 'bi-book', path: 'subjects-mgmt' },
+          { name: 'Eval Calendar', icon: 'bi-calendar-range', path: 'calendar' },
           { name: 'Eval Cycles', icon: 'bi-calendar-event', path: 'cycles' },
           { name: 'Questionnaires', icon: 'bi-list-check', path: 'questionnaires' },
-          { name: 'Audit Logs', icon: 'bi-shield-check', path: 'audit' }
+          { name: 'Audit Logs', icon: 'bi-shield-check', path: 'audit' },
+          { name: 'Detailed Feedback', icon: 'bi-shield-lock', path: 'detailed-feedback' }
         ];
         break;
     }
@@ -131,7 +151,7 @@ const app = {
   loadRoleModule() {
     const role = this.user.role;
     const script = document.createElement('script');
-    script.src = `js/pages/${role}.js`;
+    script.src = `js/pages/${role}.js?v=${new Date().getTime()}`;
     script.onload = () => {
       if (window[role + 'Module']) {
         window[role + 'Module'].init(this);

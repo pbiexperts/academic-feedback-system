@@ -1,7 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, UploadFile, File
 from sqlalchemy.orm import Session
 from typing import List
-from app.api.dependencies import get_db
+from app.api.dependencies import get_db, get_current_active_user
 from app.core.permissions import require_admin
 from app.core.security import get_password_hash
 from app.models.user import User, Student, Faculty, Role
@@ -25,6 +25,17 @@ from app.schemas.user import (
 from app.schemas.evaluation import QuestionnaireCreate, QuestionnaireResponse, EvaluationCycleCreate, EvaluationCycleResponse, EvaluationCycleUpdate
 from app.models.audit import AuditLog
 from app.services.audit_service import log_action
+
+from pydantic import BaseModel
+
+class HODAssignmentCreate(BaseModel):
+    user_id: int
+    department_id: int
+
+class PCAssignmentCreate(BaseModel):
+    user_id: int
+    department_id: int
+    employee_id: str
 
 router = APIRouter()
 
@@ -183,7 +194,7 @@ def create_division(
 def get_divisions(
     skip: int = 0, limit: int = 100,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_admin)
+    current_user: User = Depends(get_current_active_user)
 ):
     return db.query(Division).offset(skip).limit(limit).all()
 
@@ -205,7 +216,7 @@ def create_academic_year(
 def get_academic_years(
     skip: int = 0, limit: int = 100,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_admin)
+    current_user: User = Depends(get_current_active_user)
 ):
     return db.query(AcademicYear).offset(skip).limit(limit).all()
 
@@ -227,7 +238,7 @@ def create_semester(
 def get_semesters(
     skip: int = 0, limit: int = 100,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_admin)
+    current_user: User = Depends(get_current_active_user)
 ):
     return db.query(Semester).offset(skip).limit(limit).all()
 
@@ -402,16 +413,631 @@ def get_audit_logs(
     current_user: User = Depends(require_admin)
 ):
     logs = db.query(AuditLog).order_by(AuditLog.created_at.desc()).limit(100).all()
-    return [
-        {
+    result = []
+    for log in logs:
+        user = db.query(User).filter(User.id == log.user_id).first()
+        result.append({
             "id": log.id,
             "user_id": log.user_id,
+            "user_email": user.email if user else f"User {log.user_id}",
             "action": log.action,
             "resource_type": log.resource_type,
             "resource_id": log.resource_id,
             "details": log.details,
             "ip_address": log.ip_address,
             "created_at": log.created_at.isoformat() if log.created_at else None
-        }
-        for log in logs
-    ]
+        })
+    return result
+
+@router.post("/upload-master-data")
+async def upload_master_data(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin)
+):
+    import pandas as pd
+    import io
+    from app.models.feedback import FeedbackComment, FeedbackAnswer, FeedbackSubmission
+    
+    contents = await file.read()
+    xl = pd.ExcelFile(io.BytesIO(contents))
+    
+    try:
+        # Delete dependencies
+        db.query(FeedbackComment).delete()
+        db.query(FeedbackAnswer).delete()
+        db.query(FeedbackSubmission).delete()
+        db.query(FacultySubject).delete()
+        db.query(Student).delete()
+        db.query(Faculty).delete()
+        db.query(Subject).delete()
+        db.query(Division).delete()
+        db.query(Department).delete()
+        # Delete non-admin users
+        admin_role = db.query(Role).filter(Role.name == "Admin").first()
+        db.query(User).filter(User.role_id != admin_role.id).delete()
+        db.commit()
+
+        # Insert Departments
+        dept_df = pd.read_excel(xl, sheet_name='Departments', skiprows=0)
+        dept_objs = {}
+        for _, row in dept_df.iterrows():
+            dept = Department(code=row['Department Code'], name=row['Department Name'])
+            db.add(dept)
+            db.commit()
+            db.refresh(dept)
+            dept_objs[dept.code] = dept
+            
+            # create default division A
+            div = Division(name="A", department_id=dept.id)
+            db.add(div)
+            db.commit()
+            db.refresh(div)
+
+        # Get roles (MySQL might have them in caps)
+        roles = {r.name.upper(): r.id for r in db.query(Role).all()}
+        
+        # Insert HOD Users
+        hod_df = pd.read_excel(xl, sheet_name='Admin_HOD_Users', skiprows=3)
+        for _, row in hod_df.iterrows():
+            if pd.isna(row['Email']) or str(row['Role']).upper() == 'ADMIN':
+                continue
+            dept_code = row['Department Code']
+            user = User(
+                email=row['Email'],
+                password_hash=get_password_hash(str(row['Password (demo only)'])),
+                role_id=roles.get('HOD'),
+                is_active=True
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+            # Add to Faculty table as HOD
+            dept = dept_objs.get(dept_code)
+            if dept:
+                fac = Faculty(user_id=user.id, department_id=dept.id, employee_id=f"HOD_{dept_code}")
+                db.add(fac)
+                db.commit()
+        
+        # Insert Faculty
+        fac_df = pd.read_excel(xl, sheet_name='Faculty', skiprows=0)
+        fac_objs = {}
+        for _, row in fac_df.iterrows():
+            email = row['Faculty ID'].lower() + "@safas.edu"
+            user = User(
+                email=email,
+                password_hash=get_password_hash("faculty123"),
+                role_id=roles.get('FACULTY'),
+                is_active=True
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+            
+            dept = dept_objs.get(row['Department Code'])
+            fac = Faculty(user_id=user.id, department_id=dept.id, employee_id=row['Faculty ID'])
+            db.add(fac)
+            db.commit()
+            db.refresh(fac)
+            fac_objs[row['Faculty ID']] = fac
+            
+        # Insert Subjects and FacultySubject
+        sub_df = pd.read_excel(xl, sheet_name='Subjects', skiprows=0)
+        ay = db.query(AcademicYear).filter(AcademicYear.is_active == True).first()
+        sem = db.query(Semester).filter(Semester.academic_year_id == ay.id).first() if ay else None
+        
+        sub_objs = {}
+        for _, row in sub_df.iterrows():
+            code = row['Subject Code']
+            dept = dept_objs.get(row['Department Code'])
+            if code not in sub_objs:
+                sub = Subject(code=code, name=row['Subject Name'], department_id=dept.id, semester_id=sem.id if sem else 1)
+                db.add(sub)
+                db.commit()
+                db.refresh(sub)
+                sub_objs[code] = sub
+            
+            fac = fac_objs.get(row['Faculty ID'])
+            if fac:
+                fs = FacultySubject(faculty_id=fac.id, subject_id=sub_objs[code].id, academic_year_id=ay.id if ay else 1)
+                db.add(fs)
+                db.commit()
+                
+        # Insert Students
+        stu_df = pd.read_excel(xl, sheet_name='Students', skiprows=0)
+        for _, row in stu_df.iterrows():
+            email = row['Student ID'].lower() + "@safas.edu"
+            if db.query(User).filter(User.email == email).first():
+                continue
+            user = User(
+                email=email,
+                password_hash=get_password_hash("student123"),
+                role_id=roles.get('STUDENT'),
+                is_active=True
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+            
+            dept = dept_objs.get(row['Department Code'])
+            div = db.query(Division).filter(Division.department_id == dept.id).first()
+            stu = Student(user_id=user.id, department_id=dept.id, division_id=div.id, enrollment_no=row['Student ID'])
+            db.add(stu)
+            db.commit()
+            
+        # Simulate Feedback Responses
+        try:
+            from app.models.evaluation import EvaluationCycle, Questionnaire, Question
+            import datetime
+            cycle = db.query(EvaluationCycle).first()
+            if not cycle:
+                qnaire = db.query(Questionnaire).first()
+                if not qnaire:
+                    qnaire = Questionnaire(name="Standard", is_active=True)
+                    db.add(qnaire)
+                    db.commit()
+                    db.refresh(qnaire)
+                    for idx, qtext in enumerate(["Communication", "Punctuality", "Knowledge", "Beyond Curriculum", "ICT", "Coverage", "Interactive", "Accessibility"]):
+                        db.add(Question(questionnaire_id=qnaire.id, text=qtext, category="Teaching", question_type="rating", order_index=idx))
+                    db.commit()
+                cycle = EvaluationCycle(name="Imported Cycle", academic_year_id=ay.id if ay else 1, semester_id=sem.id if sem else 1, questionnaire_id=qnaire.id, start_date=datetime.date.today(), end_date=datetime.date.today(), status="ACTIVE", minimum_response_threshold=5)
+                db.add(cycle)
+                db.commit()
+                db.refresh(cycle)
+                
+            feed_df = pd.read_excel(xl, sheet_name='Feedback_Responses', skiprows=3)
+            qs = db.query(Question).filter(Question.questionnaire_id == cycle.questionnaire_id, Question.question_type == 'rating').all()
+            for _, row in feed_df.iterrows():
+                student_id = row['Student ID']
+                fac_id = row['Faculty ID']
+                sub_code = row['Subject Code']
+                
+                fac_obj = fac_objs.get(fac_id)
+                sub_obj = sub_objs.get(sub_code)
+                
+                stu_email = student_id.lower() + "@safas.edu"
+                stu_user = db.query(User).filter(User.email == stu_email).first()
+                stu_obj = db.query(Student).filter(Student.user_id == stu_user.id).first() if stu_user else None
+                
+                if fac_obj and sub_obj and stu_obj:
+                    subm = FeedbackSubmission(
+                        student_id=stu_obj.id,
+                        faculty_id=fac_obj.id,
+                        subject_id=sub_obj.id,
+                        department_id=stu_obj.department_id,
+                        evaluation_cycle_id=cycle.id,
+                        overall_faculty_rating=float(row['Overall Rating']) if not pd.isna(row['Overall Rating']) else 4.0,
+                        overall_subject_rating=float(row['Overall Rating']) if not pd.isna(row['Overall Rating']) else 4.0,
+                        status="SUBMITTED"
+                    )
+                    db.add(subm)
+                    db.commit()
+                    db.refresh(subm)
+                    
+                    if not pd.isna(row['Student Comment']):
+                        db.add(FeedbackComment(submission_id=subm.id, comment_type="additional", comment_text=str(row['Student Comment'])))
+                    
+                    for q in qs:
+                        db.add(FeedbackAnswer(submission_id=subm.id, question_id=q.id, rating=int(row['Overall Rating']) if not pd.isna(row['Overall Rating']) else 4))
+                    db.commit()
+        except Exception as ex:
+            print("Could not import feedback:", ex)
+            
+        log_action(db, "MASTER_DATA_UPLOAD", current_user.id, "system", "all")
+        return {"message": "Master data uploaded successfully."}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+
+def update_all_cycles_status(db: Session):
+    from datetime import datetime, timezone
+    import datetime as dt
+    now = datetime.now(timezone.utc)
+    cycles = db.query(EvaluationCycle).all()
+    for cycle in cycles:
+        if cycle.status == "ARCHIVED":
+            continue
+        
+        # Check start_datetime
+        start = cycle.start_datetime
+        if not start:
+            start = dt.datetime.combine(cycle.start_date, dt.time.min).replace(tzinfo=timezone.utc)
+        elif start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+
+        end = cycle.end_datetime
+        if not end:
+            end = dt.datetime.combine(cycle.end_date, dt.time.max).replace(tzinfo=timezone.utc)
+        elif end.tzinfo is None:
+            end = end.replace(tzinfo=timezone.utc)
+
+        if now < start:
+            new_status = "SCHEDULED"
+        elif start <= now <= end:
+            new_status = "ACTIVE"
+        else:
+            new_status = "CLOSED"
+
+        if cycle.status != new_status:
+            cycle.status = new_status
+            db.add(cycle)
+    db.commit()
+
+@router.get("/feedback-calendar", response_model=List[EvaluationCycleResponse])
+def get_feedback_calendar(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin)
+):
+    update_all_cycles_status(db)
+    return db.query(EvaluationCycle).all()
+
+@router.post("/feedback-calendar", response_model=EvaluationCycleResponse)
+def create_feedback_calendar_event(
+    cycle: EvaluationCycleCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin)
+):
+    # Convert dates to datetimes if they aren't explicitly provided
+    c_data = cycle.model_dump()
+    if not c_data.get("start_datetime"):
+        import datetime as dt
+        c_data["start_datetime"] = dt.datetime.combine(c_data["start_date"], dt.time.min)
+    if not c_data.get("end_datetime"):
+        import datetime as dt
+        c_data["end_datetime"] = dt.datetime.combine(c_data["end_date"], dt.time.max)
+
+    db_cycle = EvaluationCycle(**c_data)
+    db_cycle.created_by = current_user.id
+    db.add(db_cycle)
+    db.commit()
+    db.refresh(db_cycle)
+    update_all_cycles_status(db)
+    log_action(db, "FEEDBACK_EVENT_CREATED", current_user.id, "evaluation_cycle", str(db_cycle.id))
+    return db_cycle
+
+@router.put("/feedback-calendar/{id}", response_model=EvaluationCycleResponse)
+def update_feedback_calendar_event(
+    id: int,
+    cycle_update: EvaluationCycleUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin)
+):
+    db_cycle = db.query(EvaluationCycle).filter(EvaluationCycle.id == id).first()
+    if not db_cycle:
+        raise HTTPException(status_code=404, detail="Feedback event not found")
+
+    update_data = cycle_update.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(db_cycle, key, value)
+
+    db.commit()
+    db.refresh(db_cycle)
+    update_all_cycles_status(db)
+    log_action(db, "FEEDBACK_EVENT_UPDATED", current_user.id, "evaluation_cycle", str(db_cycle.id))
+    return db_cycle
+
+@router.delete("/feedback-calendar/{id}")
+def delete_feedback_calendar_event(
+    id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin)
+):
+    db_cycle = db.query(EvaluationCycle).filter(EvaluationCycle.id == id).first()
+    if not db_cycle:
+        raise HTTPException(status_code=404, detail="Feedback event not found")
+        
+    db.delete(db_cycle)
+    db.commit()
+    log_action(db, "FEEDBACK_EVENT_DELETED", current_user.id, "evaluation_cycle", str(id))
+    return {"message": "Feedback event deleted successfully"}
+
+@router.post("/feedback-calendar/{id}/activate")
+def activate_feedback_calendar_event(
+    id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin)
+):
+    db_cycle = db.query(EvaluationCycle).filter(EvaluationCycle.id == id).first()
+    if not db_cycle:
+        raise HTTPException(status_code=404, detail="Feedback event not found")
+
+    # Set start_datetime to now to activate immediately
+    from datetime import datetime, timezone
+    db_cycle.start_datetime = datetime.now(timezone.utc)
+    db_cycle.status = "ACTIVE"
+    db.commit()
+    log_action(db, "FEEDBACK_EVENT_ACTIVATED", current_user.id, "evaluation_cycle", str(id))
+    return {"message": "Feedback cycle activated successfully"}
+
+@router.post("/feedback-calendar/{id}/close")
+def close_feedback_calendar_event(
+    id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin)
+):
+    db_cycle = db.query(EvaluationCycle).filter(EvaluationCycle.id == id).first()
+    if not db_cycle:
+        raise HTTPException(status_code=404, detail="Feedback event not found")
+
+    # Set end_datetime to now to close immediately
+    from datetime import datetime, timezone
+    db_cycle.end_datetime = datetime.now(timezone.utc)
+    db_cycle.status = "CLOSED"
+    db.commit()
+    log_action(db, "FEEDBACK_EVENT_CLOSED", current_user.id, "evaluation_cycle", str(id))
+    return {"message": "Feedback cycle closed successfully"}
+
+@router.get("/detailed-feedback")
+def get_detailed_feedback(
+    academic_year_id: Optional[int] = None,
+    semester_id: Optional[int] = None,
+    department_id: Optional[int] = None,
+    division_id: Optional[int] = None,
+    subject_id: Optional[int] = None,
+    faculty_id: Optional[int] = None,
+    student_id: Optional[int] = None,
+    cycle_id: Optional[int] = None,
+    sentiment: Optional[str] = None,
+    rating: Optional[float] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin)
+):
+    # Log sensitive action
+    log_action(db, "ADMIN_ACCESS_IDENTIFIABLE_FEEDBACK", current_user.id, "feedback", "all")
+
+    query = db.query(FeedbackSubmission)
+    if academic_year_id or semester_id:
+        query = query.join(EvaluationCycle)
+        if academic_year_id:
+            query = query.filter(EvaluationCycle.academic_year_id == academic_year_id)
+        if semester_id:
+            query = query.filter(EvaluationCycle.semester_id == semester_id)
+
+    if department_id:
+        query = query.filter(FeedbackSubmission.department_id == department_id)
+    if subject_id:
+        query = query.filter(FeedbackSubmission.subject_id == subject_id)
+    if faculty_id:
+        query = query.filter(FeedbackSubmission.faculty_id == faculty_id)
+    if student_id:
+        query = query.filter(FeedbackSubmission.student_id == student_id)
+    if cycle_id:
+        query = query.filter(FeedbackSubmission.evaluation_cycle_id == cycle_id)
+    if rating:
+        query = query.filter(FeedbackSubmission.overall_faculty_rating == rating)
+
+    submissions = query.all()
+    result = []
+    
+    from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+    analyzer = SentimentIntensityAnalyzer()
+    
+    for s in submissions:
+        # Check student division
+        if division_id and s.student.division_id != division_id:
+            continue
+            
+        comments = []
+        for c in s.comments:
+            score = analyzer.polarity_scores(c.comment_text)['compound']
+            sent = "Neutral"
+            if score >= 0.05:
+                sent = "Positive"
+            elif score <= -0.05:
+                sent = "Negative"
+                
+            comments.append({
+                "comment_type": c.comment_type,
+                "comment_text": c.comment_text,
+                "sentiment": sent
+            })
+            
+        # Filter comments by sentiment if provided
+        if sentiment:
+            comments = [c for c in comments if c["sentiment"].upper() == sentiment.upper()]
+            if not comments:
+                continue
+
+        result.append({
+            "id": s.id,
+            "student": {
+                "id": s.student.id,
+                "email": s.student.user.email,
+                "enrollment_no": s.student.enrollment_no
+            },
+            "faculty": {
+                "id": s.faculty.id,
+                "email": s.faculty.user.email
+            },
+            "subject": {
+                "id": s.subject.id,
+                "name": s.subject.name,
+                "code": s.subject.code
+            },
+            "department": s.department.name,
+            "overall_rating": s.overall_faculty_rating,
+            "submitted_at": s.submitted_at.isoformat() if s.submitted_at else None,
+            "comments": comments
+        })
+        
+    return result
+
+@router.get("/dashboard-stats")
+def get_admin_dashboard_stats(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin)
+):
+    from sqlalchemy import func
+    from app.models.user import Role, ProgramCoordinator
+    
+    total_depts = db.query(Department).count()
+    total_students = db.query(Student).count()
+    total_faculty = db.query(Faculty).count()
+    
+    hod_role = db.query(Role).filter(Role.name == "HOD").first()
+    total_hods = db.query(User).filter(User.role_id == hod_role.id).count() if hod_role else 0
+    
+    total_pcs = db.query(ProgramCoordinator).count()
+    
+    update_all_cycles_status(db)
+    active_cycles = db.query(EvaluationCycle).filter(EvaluationCycle.status == "ACTIVE").count()
+    
+    submissions = db.query(FeedbackSubmission).all()
+    total_responses = len(submissions)
+    avg_rating = sum(s.overall_faculty_rating for s in submissions if s.overall_faculty_rating) / total_responses if total_responses > 0 else 0.0
+
+    distinct_students_submitted = db.query(func.count(func.distinct(FeedbackSubmission.student_id))).scalar() or 0
+    response_rate = (distinct_students_submitted / total_students * 100) if total_students > 0 else 0.0
+
+    return {
+        "total_departments": total_depts,
+        "total_students": total_students,
+        "total_faculty": total_faculty,
+        "total_hods": total_hods,
+        "total_pcs": total_pcs,
+        "active_cycles": active_cycles,
+        "response_rate": f"{round(response_rate)}%",
+        "avg_rating": round(avg_rating, 2)
+    }
+
+@router.get("/hods")
+def get_hods(db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
+    hod_role = db.query(Role).filter(Role.name == "HOD").first()
+    if not hod_role:
+        return []
+    users = db.query(User).filter(User.role_id == hod_role.id).all()
+    res = []
+    for u in users:
+        fac = db.query(Faculty).filter(Faculty.user_id == u.id).first()
+        res.append({
+            "id": u.id,
+            "email": u.email,
+            "department_id": fac.department_id if fac else None,
+            "department_name": fac.department.name if fac and fac.department else "N/A",
+            "employee_id": fac.employee_id if fac else "N/A"
+        })
+    return res
+
+@router.post("/hods")
+def create_hod(
+    assignment: HODAssignmentCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin)
+):
+    user = db.query(User).filter(User.id == assignment.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    hod_role = db.query(Role).filter(Role.name == "HOD").first()
+    if not hod_role:
+        raise HTTPException(status_code=500, detail="HOD role not configured")
+        
+    user.role_id = hod_role.id
+    db.add(user)
+    
+    fac = db.query(Faculty).filter(Faculty.user_id == user.id).first()
+    if fac:
+        fac.department_id = assignment.department_id
+        db.add(fac)
+    else:
+        new_fac = Faculty(
+            user_id=user.id,
+            department_id=assignment.department_id,
+            employee_id=f"HOD_{assignment.department_id}_{user.id}"
+        )
+        db.add(new_fac)
+        
+    db.commit()
+    log_action(db, "HOD_ASSIGNED", current_user.id, "user", str(user.id))
+    return {"message": "HOD assigned successfully"}
+
+@router.delete("/hods/{id}")
+def delete_hod(
+    id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin)
+):
+    user = db.query(User).filter(User.id == id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    faculty_role = db.query(Role).filter(Role.name == "Faculty").first()
+    if not faculty_role:
+        raise HTTPException(status_code=500, detail="Faculty role not configured")
+        
+    user.role_id = faculty_role.id
+    db.add(user)
+    db.commit()
+    log_action(db, "HOD_UNASSIGNED", current_user.id, "user", str(id))
+    return {"message": "HOD unassigned successfully"}
+
+@router.get("/program-coordinators")
+def get_program_coordinators(db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
+    from app.models.user import ProgramCoordinator
+    pcs = db.query(ProgramCoordinator).all()
+    res = []
+    for pc in pcs:
+        res.append({
+            "id": pc.id,
+            "user_id": pc.user_id,
+            "email": pc.user.email if pc.user else "N/A",
+            "department_id": pc.department_id,
+            "department_name": pc.department.name if pc.department else "N/A",
+            "employee_id": pc.employee_id
+        })
+    return res
+
+@router.post("/program-coordinators")
+def create_program_coordinator(
+    assignment: PCAssignmentCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin)
+):
+    from app.models.user import ProgramCoordinator
+    user = db.query(User).filter(User.id == assignment.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    pc_role = db.query(Role).filter(Role.name == "Program Coordinator").first()
+    if not pc_role:
+        raise HTTPException(status_code=500, detail="Program Coordinator role not configured")
+        
+    user.role_id = pc_role.id
+    db.add(user)
+    
+    existing = db.query(ProgramCoordinator).filter(ProgramCoordinator.department_id == assignment.department_id).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="A program coordinator is already assigned to this department")
+        
+    new_pc = ProgramCoordinator(
+        user_id=assignment.user_id,
+        department_id=assignment.department_id,
+        employee_id=assignment.employee_id
+    )
+    db.add(new_pc)
+    db.commit()
+    log_action(db, "PROGRAM_COORDINATOR_ASSIGNED", current_user.id, "program_coordinator", str(new_pc.id))
+    return {"message": "Program coordinator assigned successfully"}
+
+@router.delete("/program-coordinators/{id}")
+def delete_program_coordinator(
+    id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin)
+):
+    from app.models.user import ProgramCoordinator
+    pc = db.query(ProgramCoordinator).filter(ProgramCoordinator.id == id).first()
+    if not pc:
+        raise HTTPException(status_code=404, detail="Program coordinator not found")
+        
+    user = pc.user
+    if user:
+        faculty_role = db.query(Role).filter(Role.name == "Faculty").first()
+        if faculty_role:
+            user.role_id = faculty_role.id
+            db.add(user)
+            
+    db.delete(pc)
+    db.commit()
+    log_action(db, "PROGRAM_COORDINATOR_DELETED", current_user.id, "program_coordinator", str(id))
+    return {"message": "Program coordinator unassigned successfully"}

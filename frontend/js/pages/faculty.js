@@ -10,161 +10,304 @@ window.facultyModule = {
     const container = document.getElementById('mainContent');
     switch(path) {
       case 'suggestions': this.renderSuggestions(container); break;
-      case 'subjects': this.renderSubjects(container); break;
+      case 'subjects': this.renderSubjectPerformance(container); break;
       default: this.renderDashboard(container); break;
     }
+  },
+
+  currentBand: '',
+
+  changeBand(val) {
+    this.currentBand = val;
+    this.renderDashboard(document.getElementById('mainContent'));
   },
 
   async renderDashboard(container) {
     this.appContext.showLoading();
     try {
-      const data = await api.get('/analytics/faculty/dashboard');
+      const activeBand = this.currentBand || '';
+      const data = await api.get(`/analytics/faculty/dashboard?${activeBand ? 'attendance_band=' + activeBand : ''}`);
 
-      if (data.total_responses === 0) {
-        container.innerHTML = `
-          <h2 class="mb-4">Faculty Dashboard</h2>
-          <div class="alert alert-info border-0">
-            <i class="bi bi-info-circle me-2"></i>No feedback received yet.
-          </div>
-        `;
-        return;
-      }
+      const ratingStr = data.overall_rating ? Number(data.overall_rating).toFixed(2) : '0.00';
 
-      const belowThreshold = data.overall_rating === 0 && data.subjects_evaluated === 0;
-      
       container.innerHTML = `
         <div class="d-flex justify-content-between align-items-center mb-4">
-          <h2>Faculty Dashboard</h2>
-          ${belowThreshold ? '' : this.appContext.ratingBadge(data.overall_rating)}
-        </div>
-
-        ${belowThreshold ? `
-          <div class="alert alert-warning border-0 mb-4">
-            <i class="bi bi-shield-lock me-2"></i>
-            <strong>Insufficient responses to display detailed analysis.</strong>
-            At least 5 responses are required per subject for detailed analytics.
+          <div>
+            <h2 class="mb-1">Faculty Dashboard</h2>
+            <p class="text-muted mb-0"><i class="bi bi-person-workspace me-1"></i>Personal Performance Overview</p>
           </div>
-        ` : ''}
+          <div class="d-flex gap-2 align-items-center">
+            <select class="form-select form-select-sm w-auto" onchange="facultyModule.changeBand(this.value)">
+              <option value="" ${activeBand === '' ? 'selected' : ''}>All Eligible Students</option>
+              <option value="60-69" ${activeBand === '60-69' ? 'selected' : ''}>60–69% Attendance</option>
+              <option value="70-79" ${activeBand === '70-79' ? 'selected' : ''}>70–79% Attendance</option>
+              <option value="80-89" ${activeBand === '80-89' ? 'selected' : ''}>80–89% Attendance</option>
+              <option value="90-100" ${activeBand === '90-100' ? 'selected' : ''}>90–100% Attendance</option>
+            </select>
+            ${this.appContext.ratingBadge(data.overall_rating)}
+          </div>
+        </div>
 
         <div class="row g-4 mb-4">
-          <div class="col-md-3">${this.appContext.createKPICard('Overall Rating', belowThreshold ? '—' : Number(data.overall_rating).toFixed(2), 'bi-star-fill')}</div>
-          <div class="col-md-3">${this.appContext.createKPICard('Total Responses', data.total_responses, 'bi-people-fill')}</div>
-          <div class="col-md-3">${this.appContext.createKPICard('Subjects Evaluated', data.subjects_evaluated, 'bi-book')}</div>
-          <div class="col-md-3">${this.appContext.createKPICard('Status', belowThreshold ? 'Awaiting Data' : 'Active', 'bi-activity')}</div>
+          <div class="col-md-3">${this.appContext.createKPICard('Assigned Subjects', data.assigned_subjects_count || 0, 'bi-book-half')}</div>
+          <div class="col-md-3">${this.appContext.createKPICard('Eligible Students', data.eligible_students || 0, 'bi-mortarboard')}</div>
+          <div class="col-md-3">${this.appContext.createKPICard('Total Responses', data.total_responses || 0, 'bi-chat-left-text-fill')}</div>
+          <div class="col-md-3">${this.appContext.createKPICard('Response Rate', data.response_rate || '0%', 'bi-percent')}</div>
         </div>
 
-        ${!belowThreshold ? `
-          <div class="row g-4">
-            <div class="col-md-6">
-              <div class="card shadow-sm border-0 h-100">
-                <div class="card-body">
-                  <h5 class="mb-3"><i class="bi bi-bar-chart me-2"></i>Rating Distribution</h5>
-                  <canvas id="ratingDistChart" height="250"></canvas>
-                </div>
-              </div>
-            </div>
-            <div class="col-md-6">
-              <div class="card shadow-sm border-0 h-100">
-                <div class="card-body">
-                  <h5 class="mb-3"><i class="bi bi-graph-up me-2"></i>Category Performance</h5>
-                  <canvas id="categoryChart" height="250"></canvas>
-                </div>
-              </div>
+        <div class="row g-4 mb-4">
+          <div class="col-md-3">${this.appContext.createKPICard('Average Rating', ratingStr, 'bi-star-fill')}</div>
+          <div class="col-md-3">${this.appContext.createKPICard('Positive Sentiment', data.positive_sentiment_pct || '0%', 'bi-emoji-smile', 'success')}</div>
+          <div class="col-md-3">${this.appContext.createKPICard('Negative Sentiment', data.negative_sentiment_pct || '0%', 'bi-emoji-frown', 'warning')}</div>
+          <div class="col-md-3">${this.appContext.createKPICard('Critical Feedback', data.critical_feedback_count || 0, 'bi-exclamation-triangle', 'danger')}</div>
+        </div>
+
+        <div class="card border-0 shadow-sm">
+          <div class="card-header bg-white border-0 pt-3">
+            <h5 class="mb-0"><i class="bi bi-journal-text me-2"></i>Subject Wise Performance Summary</h5>
+          </div>
+          <div class="card-body p-0">
+            <div class="table-responsive">
+              <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                  <tr>
+                    <th>Subject Name</th>
+                    <th>Rating</th>
+                    <th>Responses</th>
+                    <th>Response Rate</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${data.performance && data.performance.length > 0 ? data.performance.map(p => `
+                    <tr>
+                      <td class="fw-semibold">${p.subject_name}</td>
+                      <td>${this.appContext.ratingBadge(p.overall_rating)}</td>
+                      <td>${p.response_count}</td>
+                      <td>${p.response_rate}%</td>
+                    </tr>
+                  `).join('') : '<tr><td colspan="4" class="text-center py-4 text-muted">No subject evaluations collected yet.</td></tr>'}
+                </tbody>
+              </table>
             </div>
           </div>
-        ` : ''}
+        </div>
       `;
-
-      if (!belowThreshold) {
-        this.renderCharts(data);
-      }
     } catch (err) {
       this.appContext.showError('mainContent', err.message);
     }
   },
 
-  renderCharts(data) {
-    // Rating distribution chart (demo data based on overall rating)
-    const rating = data.overall_rating;
-    new Chart(document.getElementById('ratingDistChart'), {
-      type: 'bar',
-      data: {
-        labels: ['1 - Very Poor', '2 - Poor', '3 - Average', '4 - Good', '5 - Excellent'],
-        datasets: [{
-          label: 'Responses',
-          data: [
-            Math.round(data.total_responses * 0.02),
-            Math.round(data.total_responses * 0.08),
-            Math.round(data.total_responses * 0.20),
-            Math.round(data.total_responses * 0.35),
-            Math.round(data.total_responses * 0.35)
-          ],
-          backgroundColor: ['#ef5350', '#ff7043', '#ffa726', '#66bb6a', '#42a5f5']
-        }]
-      },
-      options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } }
-    });
-
-    // Category performance radar
-    new Chart(document.getElementById('categoryChart'), {
-      type: 'radar',
-      data: {
-        labels: ['Teaching', 'Communication', 'Engagement', 'Assessment', 'Professionalism'],
-        datasets: [{
-          label: 'Rating',
-          data: [rating * 0.95, rating * 1.02, rating * 0.90, rating * 0.98, rating * 1.05].map(v => Math.min(v, 5).toFixed(2)),
-          backgroundColor: 'rgba(26, 35, 126, 0.2)',
-          borderColor: '#1a237e',
-          pointBackgroundColor: '#1a237e'
-        }]
-      },
-      options: { responsive: true, scales: { r: { min: 0, max: 5 } } }
-    });
-  },
-
-  async renderSubjects(container) {
+  async renderSubjectPerformance(container) {
     this.appContext.showLoading();
     try {
-      const data = await api.get('/analytics/faculty/dashboard');
-      
-      if (!data.performance || data.performance.length === 0) {
+      const data = await api.get('/analytics/faculty/subject-performance');
+
+      if (!data.subjects || data.subjects.length === 0) {
         container.innerHTML = `
           <h2 class="mb-4">Subject Performance</h2>
           <div class="alert alert-info border-0">
-            <i class="bi bi-info-circle me-2"></i>Detailed subject-wise breakdown will appear here when enough data is collected.
+            <i class="bi bi-info-circle me-2"></i>No subjects currently assigned to you.
           </div>
         `;
         return;
       }
 
       container.innerHTML = `
-        <h2 class="mb-4">Subject Performance</h2>
-        <div class="row g-4">
-          ${data.performance.map(subject => `
-            <div class="col-md-6 col-lg-4">
-              <div class="card shadow-sm border-0 h-100 kpi-card">
-                <div class="card-body">
-                  <h5 class="card-title mb-1">${subject.subject_name || 'Subject ' + subject.subject_id}</h5>
-                  <p class="text-muted small mb-3">ID: ${subject.subject_id}</p>
-                  
-                  <div class="d-flex justify-content-between align-items-center mb-3">
-                    <span class="text-muted">Overall Rating:</span>
-                    <strong>${this.appContext.ratingBadge(subject.overall_rating)}</strong>
-                  </div>
-                  
-                  <div class="d-flex justify-content-between align-items-center">
-                    <span class="text-muted">Responses:</span>
-                    <span class="badge bg-secondary rounded-pill">${subject.response_count}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          `).join('')}
+        <div class="d-flex justify-content-between align-items-center mb-4">
+          <h2>Subject Performance</h2>
+          <div class="d-flex align-items-center gap-2">
+            <label class="fw-semibold mb-0">Select Subject:</label>
+            <select class="form-select form-select-sm w-auto" id="facSubjectSelect" onchange="facultyModule.loadSubjectDetails(this.value)">
+              ${data.subjects.map(s => `<option value="${s.id}" ${data.selected_subject && s.id === data.selected_subject.id ? 'selected' : ''}>${s.code} - ${s.name}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+
+        <div id="subjectDetailsContainer">
+          <!-- Dynamically populated -->
         </div>
       `;
+
+      this.renderSubjectOverview(data);
     } catch (err) {
       this.appContext.showError('mainContent', err.message);
     }
+  },
+
+  async loadSubjectDetails(subjectId) {
+    try {
+      const data = await api.get(`/analytics/faculty/subject-performance?subject_id=${subjectId}`);
+      this.renderSubjectOverview(data);
+    } catch(err) {
+      console.error("Error loading subject details:", err);
+    }
+  },
+
+  renderSubjectOverview(data) {
+    const detailContainer = document.getElementById('subjectDetailsContainer');
+    if (!detailContainer) return;
+
+    const subj = data.selected_subject;
+    if (!subj) {
+      detailContainer.innerHTML = '<div class="alert alert-info">No details available.</div>';
+      return;
+    }
+
+    detailContainer.innerHTML = `
+      <div class="card border-0 shadow-sm mb-4">
+        <div class="card-header bg-white border-0 pt-3">
+          <h5 class="mb-0"><i class="bi bi-card-checklist me-2 text-primary"></i>Subject Overview</h5>
+        </div>
+        <div class="card-body">
+          <div class="row g-3">
+            <div class="col-md-4"><span class="text-muted">Subject Name:</span> <strong class="d-block">${subj.name}</strong></div>
+            <div class="col-md-2"><span class="text-muted">Code:</span> <strong class="d-block"><code>${subj.code}</code></strong></div>
+            <div class="col-md-2"><span class="text-muted">Semester:</span> <strong class="d-block">${subj.semester}</strong></div>
+            <div class="col-md-2"><span class="text-muted">Academic Year:</span> <strong class="d-block">${subj.academic_year}</strong></div>
+            <div class="col-md-2"><span class="text-muted">Faculty:</span> <strong class="d-block">${subj.faculty}</strong></div>
+          </div>
+          <hr>
+          <div class="row g-3 text-center">
+            <div class="col-md-3">
+              <span class="text-muted small">Eligible Students</span>
+              <h4 class="mb-0 text-primary">${subj.eligible_students}</h4>
+            </div>
+            <div class="col-md-3">
+              <span class="text-muted small">Responses</span>
+              <h4 class="mb-0 text-success">${subj.responses}</h4>
+            </div>
+            <div class="col-md-3">
+              <span class="text-muted small">Response Rate</span>
+              <h4 class="mb-0 text-info">${subj.response_rate}</h4>
+            </div>
+            <div class="col-md-3">
+              <span class="text-muted small">Average Rating</span>
+              <h4 class="mb-0 text-warning">${this.appContext.ratingBadge(subj.average_rating)}</h4>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row g-4 mb-4">
+        <div class="col-md-6">
+          <div class="card shadow-sm border-0 h-100">
+            <div class="card-body">
+              <h5 class="mb-3"><i class="bi bi-bar-chart-line me-2"></i>Chart 1 — Question-wise Rating</h5>
+              <canvas id="chartQuestionRatings" height="230"></canvas>
+            </div>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="card shadow-sm border-0 h-100">
+            <div class="card-body">
+              <h5 class="mb-3"><i class="bi bi-bar-chart-steps me-2"></i>Chart 2 — Attendance-wise Feedback</h5>
+              <canvas id="chartAttendanceBands" height="230"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row g-4 mb-4">
+        <div class="col-md-4">
+          <div class="card shadow-sm border-0 h-100">
+            <div class="card-body">
+              <h5 class="mb-3"><i class="bi bi-pie-chart me-2"></i>Chart 3 — Sentiment</h5>
+              <canvas id="chartSentiment" height="230"></canvas>
+            </div>
+          </div>
+        </div>
+        <div class="col-md-4">
+          <div class="card shadow-sm border-0 h-100">
+            <div class="card-body">
+              <h5 class="mb-3"><i class="bi bi-graph-up me-2"></i>Chart 4 — Rating Trend</h5>
+              <canvas id="chartRatingTrend" height="230"></canvas>
+            </div>
+          </div>
+        </div>
+        <div class="col-md-4">
+          <div class="card shadow-sm border-0 h-100">
+            <div class="card-body">
+              <h5 class="mb-3"><i class="bi bi-person-check me-2"></i>Chart 5 — Response Rate</h5>
+              <canvas id="chartResponseRate" height="230"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    // Render Chart 1: Question-wise
+    new Chart(document.getElementById('chartQuestionRatings'), {
+      type: 'bar',
+      data: {
+        labels: data.question_ratings ? data.question_ratings.map(q => q.question.length > 25 ? q.question.substring(0, 25) + '...' : q.question) : [],
+        datasets: [{
+          label: 'Rating',
+          data: data.question_ratings ? data.question_ratings.map(q => q.rating) : [],
+          backgroundColor: '#1a237e'
+        }]
+      },
+      options: { responsive: true, scales: { y: { min: 0, max: 5 } } }
+    });
+
+    // Render Chart 2: Attendance-wise
+    new Chart(document.getElementById('chartAttendanceBands'), {
+      type: 'bar',
+      data: {
+        labels: data.attendance_ratings ? data.attendance_ratings.map(b => b.band) : ['60-69%', '70-79%', '80-89%', '90-100%'],
+        datasets: [{
+          label: 'Avg Rating',
+          data: data.attendance_ratings ? data.attendance_ratings.map(b => b.rating) : [0, 0, 0, 0],
+          backgroundColor: '#0288d1'
+        }]
+      },
+      options: { responsive: true, scales: { y: { min: 0, max: 5 } } }
+    });
+
+    // Render Chart 3: Sentiment
+    new Chart(document.getElementById('chartSentiment'), {
+      type: 'doughnut',
+      data: {
+        labels: ['Positive', 'Neutral', 'Negative'],
+        datasets: [{
+          data: [
+            data.sentiment_distribution ? data.sentiment_distribution.positive : 0,
+            data.sentiment_distribution ? data.sentiment_distribution.neutral : 0,
+            data.sentiment_distribution ? data.sentiment_distribution.negative : 0
+          ],
+          backgroundColor: ['#2e7d32', '#0288d1', '#d32f2f']
+        }]
+      },
+      options: { responsive: true }
+    });
+
+    // Render Chart 4: Rating Trend
+    new Chart(document.getElementById('chartRatingTrend'), {
+      type: 'line',
+      data: {
+        labels: data.rating_trend ? data.rating_trend.map(t => t.cycle) : ['Current'],
+        datasets: [{
+          label: 'Rating',
+          data: data.rating_trend ? data.rating_trend.map(t => t.rating) : [subj.average_rating],
+          borderColor: '#1a237e',
+          fill: false
+        }]
+      },
+      options: { responsive: true, scales: { y: { min: 0, max: 5 } } }
+    });
+
+    // Render Chart 5: Response Rate
+    new Chart(document.getElementById('chartResponseRate'), {
+      type: 'bar',
+      data: {
+        labels: ['Eligible Students', 'Submitted Responses'],
+        datasets: [{
+          label: 'Count',
+          data: [data.response_rate_data ? data.response_rate_data.eligible : 0, data.response_rate_data ? data.response_rate_data.responses : 0],
+          backgroundColor: ['#7986cb', '#4caf50']
+        }]
+      },
+      options: { responsive: true }
+    });
   },
 
   async renderSuggestions(container) {
@@ -173,9 +316,10 @@ window.facultyModule = {
       const data = await api.get('/analytics/faculty/suggestions');
       
       container.innerHTML = `
-        <h2 class="mb-4">Anonymous Suggestions</h2>
+        <h2 class="mb-4">Anonymous Student Suggestions</h2>
         <div class="alert alert-info border-0 mb-4">
-          <i class="bi bi-shield-lock me-2"></i>All suggestions are displayed anonymously. Student identity is never revealed.
+          <i class="bi bi-shield-lock me-2"></i>
+          <strong>Privacy Rule:</strong> Detailed feedback is displayed completely anonymously. Student identity (name, ID, enrollment, email) is never disclosed.
         </div>
       `;
       
@@ -184,9 +328,8 @@ window.facultyModule = {
            <div class="card shadow-sm border-0">
              <div class="card-body">
                <p class="text-muted text-center my-4">
-                 <i class="bi bi-lock fs-1 d-block mb-3"></i>
-                 Suggestions are currently hidden to protect student anonymity.<br>
-                 They will become visible once the minimum response threshold is met.
+                 <i class="bi bi-lock fs-1 d-block mb-3 text-warning"></i>
+                 <strong>Detailed feedback is hidden because the minimum response threshold has not been reached.</strong>
                </p>
              </div>
            </div>
@@ -205,19 +348,13 @@ window.facultyModule = {
          return;
       }
       
-      const getIcon = (type) => {
-         if (type === 'what_liked') return '<i class="bi bi-hand-thumbs-up text-success"></i>';
-         if (type === 'what_improved') return '<i class="bi bi-graph-up-arrow text-warning"></i>';
-         return '<i class="bi bi-chat-text text-primary"></i>';
+      const getCategoryBadge = (cat) => {
+         if (cat === 'Critical') return '<span class="badge bg-danger">Critical</span>';
+         if (cat === 'Needs Improvement') return '<span class="badge bg-warning text-dark">Needs Improvement</span>';
+         if (cat === 'Positive') return '<span class="badge bg-success">Positive</span>';
+         return '<span class="badge bg-info text-dark">General Suggestion</span>';
       };
-      
-      const getLabel = (type) => {
-         if (type === 'what_liked') return 'Appreciation';
-         if (type === 'what_improved') return 'Improvement';
-         if (type === 'text_answer') return 'Questionnaire Answer';
-         return 'General Comment';
-      };
-      
+
       const getSentimentBadge = (sentiment) => {
           if (!sentiment) return '';
           if (sentiment === 'Positive') return '<span class="badge bg-success-subtle text-success ms-2"><i class="bi bi-emoji-smile me-1"></i>Positive</span>';
@@ -233,12 +370,13 @@ window.facultyModule = {
                 <div class="card-body">
                   <div class="d-flex justify-content-between align-items-center mb-2">
                     <div>
-                      <span class="badge bg-light text-dark border">${s.subject_name}</span>
+                      <span class="badge bg-light text-dark border me-1">${s.subject_name}</span>
+                      ${getCategoryBadge(s.category)}
                       ${getSentimentBadge(s.sentiment)}
                     </div>
-                    <span class="small text-muted">${getIcon(s.suggestion_type)} ${getLabel(s.suggestion_type)}</span>
+                    <span class="small text-muted">${s.cycle_name || ''}</span>
                   </div>
-                  <p class="mb-0 mt-3 fst-italic">"${s.text}"</p>
+                  <p class="mb-0 mt-3 fst-italic">"${s.comment_text || s.text}"</p>
                 </div>
               </div>
             </div>

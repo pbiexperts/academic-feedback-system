@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Optional, List
 from datetime import date, datetime
 
@@ -16,8 +16,7 @@ class QuestionResponse(QuestionBase):
     id: int
     questionnaire_id: int
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class QuestionnaireBase(BaseModel):
     name: str
@@ -31,8 +30,7 @@ class QuestionnaireResponse(QuestionnaireBase):
     created_at: datetime
     questions: List[QuestionResponse] = []
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class EvaluationCycleBase(BaseModel):
     name: str
@@ -41,6 +39,11 @@ class EvaluationCycleBase(BaseModel):
     questionnaire_id: int
     start_date: date
     end_date: date
+    start_datetime: Optional[datetime] = None
+    end_datetime: Optional[datetime] = None
+    scope: Optional[str] = "COLLEGE"
+    created_by: Optional[int] = None
+    timezone: Optional[str] = "UTC"
     status: str = "UPCOMING"
     minimum_response_threshold: int = 5
 
@@ -51,6 +54,11 @@ class EvaluationCycleUpdate(BaseModel):
     name: Optional[str] = None
     start_date: Optional[date] = None
     end_date: Optional[date] = None
+    start_datetime: Optional[datetime] = None
+    end_datetime: Optional[datetime] = None
+    scope: Optional[str] = None
+    created_by: Optional[int] = None
+    timezone: Optional[str] = None
     status: Optional[str] = None
     minimum_response_threshold: Optional[int] = None
 
@@ -59,5 +67,4 @@ class EvaluationCycleResponse(EvaluationCycleBase):
     created_at: datetime
     updated_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

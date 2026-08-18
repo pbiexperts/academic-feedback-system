@@ -23,6 +23,7 @@ class User(Base):
     role = relationship("Role", back_populates="users")
     student_profile = relationship("Student", back_populates="user", uselist=False)
     faculty_profile = relationship("Faculty", back_populates="user", uselist=False)
+    program_coordinator_profile = relationship("ProgramCoordinator", back_populates="user", uselist=False)
 
 class Student(Base):
     __tablename__ = "students"
@@ -48,3 +49,14 @@ class Faculty(Base):
     department = relationship("Department")
     subjects = relationship("FacultySubject", back_populates="faculty")
     received_feedback = relationship("FeedbackSubmission", back_populates="faculty")
+
+class ProgramCoordinator(Base):
+    __tablename__ = "program_coordinators"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False)
+    department_id = Column(Integer, ForeignKey("departments.id"), nullable=False)
+    employee_id = Column(String(50), unique=True, index=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    user = relationship("User", back_populates="program_coordinator_profile")
+    department = relationship("Department")

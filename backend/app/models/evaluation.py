@@ -34,6 +34,11 @@ class EvaluationCycle(Base):
     questionnaire_id = Column(Integer, ForeignKey("questionnaires.id"), nullable=False)
     start_date = Column(Date, nullable=False)
     end_date = Column(Date, nullable=False)
+    start_datetime = Column(DateTime(timezone=True), nullable=True)
+    end_datetime = Column(DateTime(timezone=True), nullable=True)
+    scope = Column(String(100), default="COLLEGE")
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    timezone = Column(String(50), default="UTC")
     status = Column(String(20), default="UPCOMING") # UPCOMING, ACTIVE, CLOSED, ARCHIVED
     minimum_response_threshold = Column(Integer, default=5)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -43,3 +48,4 @@ class EvaluationCycle(Base):
     semester = relationship("Semester")
     questionnaire = relationship("Questionnaire", back_populates="evaluation_cycles")
     submissions = relationship("FeedbackSubmission", back_populates="evaluation_cycle")
+    creator = relationship("User")

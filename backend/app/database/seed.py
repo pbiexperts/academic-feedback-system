@@ -2,17 +2,18 @@ import datetime
 from sqlalchemy.orm import Session
 from app.database.session import SessionLocal, engine
 from app.database.base_class import Base
-from app.models.user import Role, User, Student, Faculty
+from app.models.user import Role, User, Student, Faculty, ProgramCoordinator
 from app.models.academic import Department, Division, Subject, AcademicYear, Semester, FacultySubject
 from app.models.evaluation import Questionnaire, Question, EvaluationCycle
 from app.models.feedback import FeedbackSubmission, FeedbackAnswer, FeedbackComment
+from app.models.attendance import Attendance
 from app.core.security import get_password_hash
 
 def seed_data(db: Session):
     # Base.metadata.create_all(bind=engine) # Assume tables are created via alembic or main
 
     # 1. Roles
-    roles = ["Admin", "Dean", "HOD", "Faculty", "Student"]
+    roles = ["Admin", "Dean", "HOD", "Faculty", "Student", "Program Coordinator"]
     role_objs = {}
     for r in roles:
         role = db.query(Role).filter(Role.name == r).first()
@@ -273,10 +274,68 @@ def seed_data(db: Session):
                 db.add(FeedbackComment(submission_id=subm.id, comment_type=chosen[0], comment_text=chosen[1]))
                 db.commit()
 
+    # 11. Program Coordinators
+    pc_user = create_user("pc.cs@safas.edu", "pc123", "Program Coordinator")
+    pc = db.query(ProgramCoordinator).filter(ProgramCoordinator.user_id == pc_user.id).first()
+    if not pc:
+        pc = ProgramCoordinator(
+            user_id=pc_user.id,
+            department_id=dept_objs["CS"].id,
+            employee_id="PC_CS"
+        )
+        db.add(pc)
+        db.commit()
+        db.refresh(pc)
+
+    # 12. Attendance Records
+    # Seed attendance for all students for all subjects of their department
+    student_attendance_pcts = {
+        # Eligible (> 60%)
+        1: 85.0, 2: 72.0, 4: 91.0, 5: 65.0, 7: 88.0, 8: 75.0, 10: 95.0,
+        # Ineligible (< 60%)
+        3: 57.0, 6: 48.0, 9: 50.0
+    }
+    
+    for s in student_users:
+        dept_code = next(code for code, dept in dept_objs.items() if dept.id == s.department_id)
+        dept_subs = subjects_data[dept_code]
+        for name, sub_code in dept_subs:
+            sub = subject_objs[sub_code]
+            # Find assigned faculty
+            assign = db.query(FacultySubject).filter(FacultySubject.subject_id == sub.id).first()
+            faculty_id = assign.faculty_id if assign else 1
+            
+            att = db.query(Attendance).filter(
+                Attendance.student_id == s.id,
+                Attendance.subject_id == sub.id,
+                Attendance.academic_year_id == ay.id,
+                Attendance.semester_id == active_sem.id
+            ).first()
+            
+            if not att:
+                pct = student_attendance_pcts.get(s.id, 80.0)
+                total_classes = 40
+                attended = int(round((pct / 100.0) * total_classes))
+                att = Attendance(
+                    student_id=s.id,
+                    subject_id=sub.id,
+                    faculty_id=faculty_id,
+                    department_id=s.department_id,
+                    academic_year_id=ay.id,
+                    semester_id=active_sem.id,
+                    division_id=s.division_id,
+                    total_classes=total_classes,
+                    classes_attended=attended,
+                    attendance_percentage=(attended / total_classes) * 100.0
+                )
+                db.add(att)
+                db.commit()
+
     print("Database seeded successfully!")
     print("\nDemo Credentials (all use the listed passwords):")
     print("  Admin:    admin@safas.edu / admin123")
     print("  Dean:     dean@safas.edu / dean123")
+    print("  PC CS:    pc.cs@safas.edu / pc123")
     print("  HOD CS:   hod.cs@safas.edu / hod123")
     print("  HOD EC:   hod.ec@safas.edu / hod123")
     print("  HOD ME:   hod.me@safas.edu / hod123")

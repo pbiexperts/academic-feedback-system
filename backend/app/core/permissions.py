@@ -20,5 +20,30 @@ class RoleChecker:
 require_admin = RoleChecker(["Admin"])
 require_dean = RoleChecker(["Admin", "Dean"])
 require_hod = RoleChecker(["Admin", "Dean", "HOD"])
+require_program_coordinator = RoleChecker(["Admin", "Program Coordinator"])
 require_faculty = RoleChecker(["Faculty"])
 require_student = RoleChecker(["Student"])
+
+def verify_pc_dept(current_user: User, department_id: int, db = None):
+    """
+    Ensures Program Coordinator only accesses their own department.
+    """
+    if current_user.role.name.upper() == "ADMIN":
+        return
+    if current_user.role.name.upper() == "PROGRAM COORDINATOR":
+        if not current_user.program_coordinator_profile or current_user.program_coordinator_profile.department_id != department_id:
+            raise HTTPException(status_code=403, detail="Access denied to this department")
+    else:
+        raise HTTPException(status_code=403, detail="Operation not permitted")
+
+def verify_hod_dept(current_user: User, department_id: int, db = None):
+    """
+    Ensures HOD only accesses their own department.
+    """
+    if current_user.role.name.upper() in ["ADMIN", "DEAN"]:
+        return
+    if current_user.role.name.upper() == "HOD":
+        if not current_user.faculty_profile or current_user.faculty_profile.department_id != department_id:
+            raise HTTPException(status_code=403, detail="Access denied to this department")
+    else:
+        raise HTTPException(status_code=403, detail="Operation not permitted")

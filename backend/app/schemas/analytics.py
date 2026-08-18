@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Optional, List
 
 class FacultyPerformanceBase(BaseModel):
@@ -27,12 +27,20 @@ class FacultySuggestionsResponse(BaseModel):
 
 class DepartmentPerformanceBase(BaseModel):
     department_id: int
+    department_name: Optional[str] = None
     overall_rating: float
     total_responses: int
     faculty_count: int
+    response_rate: Optional[str] = "0%"
+    positive_sentiment: Optional[str] = "0%"
+    critical_feedback: Optional[str] = "0%"
+    status: Optional[str] = "Good"
 
 class HODDashboardResponse(BaseModel):
     department_id: int
+    department_name: Optional[str] = None
+    total_students: Optional[int] = 0
+    eligible_students: Optional[int] = 0
     overall_rating: float
     total_responses: int
     faculty_performance: List[FacultyPerformanceBase]
@@ -40,4 +48,9 @@ class HODDashboardResponse(BaseModel):
 class DeanDashboardResponse(BaseModel):
     college_rating: float
     total_responses: int
+    departments_count: int
+    response_rate: Optional[str] = "0%"
+    positive_sentiment: Optional[str] = "0%"
+    critical_feedback: Optional[str] = "0%"
     department_performance: List[DepartmentPerformanceBase]
+

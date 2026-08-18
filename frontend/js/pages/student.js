@@ -63,19 +63,30 @@ window.studentModule = {
   },
 
   renderStatusTable(cycleStatus) {
-    const rows = cycleStatus.subjects.map(s => `
-      <tr>
-        <td><strong>${s.subject_name}</strong></td>
-        <td>${s.is_submitted 
-          ? '<span class="badge bg-success"><i class="bi bi-check-circle me-1"></i>Submitted</span>' 
-          : '<span class="badge bg-warning text-dark"><i class="bi bi-clock me-1"></i>Pending</span>'}</td>
-        <td>
-          ${s.is_submitted 
-            ? '<button class="btn btn-sm btn-outline-secondary" disabled>Done</button>'
-            : `<button class="btn btn-sm btn-primary" onclick="studentModule.startFeedback(${s.subject_id}, ${s.faculty_id}, ${cycleStatus.cycle_id})"><i class="bi bi-pencil me-1"></i>Give Feedback</button>`}
-        </td>
-      </tr>
-    `).join('');
+    const rows = cycleStatus.subjects.map(s => {
+      const eligibilityBadge = s.is_eligible 
+        ? `<span class="badge bg-success">Eligible (${s.attendance_percentage.toFixed(1)}% Attendance)</span>` 
+        : `<span class="badge bg-danger">Not Eligible (Attendance: ${s.attendance_percentage.toFixed(1)}% &middot; Min required: 60%)</span>`;
+
+      return `
+        <tr>
+          <td>
+            <strong>${s.subject_name}</strong>
+            <div class="mt-1">${eligibilityBadge}</div>
+          </td>
+          <td>${s.is_submitted 
+            ? '<span class="badge bg-success"><i class="bi bi-check-circle me-1"></i>Submitted</span>' 
+            : '<span class="badge bg-warning text-dark"><i class="bi bi-clock me-1"></i>Pending</span>'}</td>
+          <td>
+            ${s.is_submitted 
+              ? '<button class="btn btn-sm btn-outline-secondary" disabled>Done</button>'
+              : s.is_eligible
+                ? `<button class="btn btn-sm btn-primary" onclick="studentModule.startFeedback(${s.subject_id}, ${s.faculty_id}, ${cycleStatus.cycle_id})"><i class="bi bi-pencil me-1"></i>Give Feedback</button>`
+                : `<button class="btn btn-sm btn-secondary" disabled title="Minimum attendance required: 60%"><i class="bi bi-lock me-1"></i>Give Feedback</button>`}
+          </td>
+        </tr>
+      `;
+    }).join('');
 
     return `
       <div class="table-responsive">
@@ -99,7 +110,8 @@ window.studentModule = {
               <div class="kpi-card">
                 <h5>${s.subject_name}</h5>
                 <p class="text-muted mb-1"><i class="bi bi-hash me-1"></i>${s.subject_code}</p>
-                <p class="mb-0"><i class="bi bi-person me-1"></i>${s.faculty_name}</p>
+                <p class="mb-1"><i class="bi bi-person me-1"></i>${s.faculty_name}</p>
+                <p class="mb-0 fw-semibold text-primary"><i class="bi bi-calendar-check me-1"></i>Attendance: ${s.attendance_percentage.toFixed(2)}% (${s.is_eligible ? 'Eligible' : 'Not Eligible'})</p>
               </div>
             </div>
           `).join('')}

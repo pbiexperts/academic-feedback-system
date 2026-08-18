@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, Date
+from sqlalchemy import Column, Integer, String, ForeignKey, Date, UniqueConstraint
 from sqlalchemy.orm import relationship
 from app.database.base_class import Base
 
@@ -46,7 +46,13 @@ class FacultySubject(Base):
     faculty_id = Column(Integer, ForeignKey("faculty.id"), nullable=False)
     subject_id = Column(Integer, ForeignKey("subjects.id"), nullable=False)
     academic_year_id = Column(Integer, ForeignKey("academic_years.id"), nullable=False)
+    division_id = Column(Integer, ForeignKey("divisions.id"), nullable=True)
     
     faculty = relationship("Faculty", back_populates="subjects")
     subject = relationship("Subject", back_populates="faculty_assignments")
     academic_year = relationship("AcademicYear")
+    division = relationship("Division")
+
+    __table_args__ = (
+        UniqueConstraint('faculty_id', 'subject_id', 'academic_year_id', 'division_id', name='uq_faculty_subject_assignment'),
+    )
